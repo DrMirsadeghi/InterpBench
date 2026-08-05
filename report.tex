@@ -1,0 +1,162 @@
+% ============================================================
+% benchmark_report.tex
+% InterpBench Benchmark Report Template
+% ============================================================
+
+\documentclass[11pt,a4paper]{article}
+
+% ------------------------------------------------------------
+% Packages
+% ------------------------------------------------------------
+
+\usepackage[a4paper,margin=1in]{geometry}
+
+% Landscape tables
+\usepackage{pdflscape}
+
+% Figures and tables
+\usepackage{float}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+
+% References and links
+\usepackage{hyperref}
+
+% Header/footer control
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+
+% Formatting
+\usepackage{titlesec}
+\usepackage{caption}
+
+% Date formatting
+\usepackage{datetime2}
+
+
+% ------------------------------------------------------------
+% Paragraph formatting
+% ------------------------------------------------------------
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+
+
+% ------------------------------------------------------------
+% Hyperlinks
+% ------------------------------------------------------------
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    urlcolor=black,
+    citecolor=black
+}
+
+
+% ------------------------------------------------------------
+% Header and footer
+% ------------------------------------------------------------
+
+\pagestyle{fancy}
+
+\fancyhf{}
+
+\lhead{InterpBench}
+\rhead{Benchmark Report}
+
+\cfoot{
+    Page \thepage\ of \pageref{LastPage}
+}
+
+
+% ------------------------------------------------------------
+% Title
+% ------------------------------------------------------------
+
+\title{
+    \vspace{-2cm}
+    \textbf{InterpBench Benchmark Report}
+}
+
+\author{}
+
+\date{}
+
+
+% ============================================================
+% Document
+% ============================================================
+
+\begin{document}
+
+
+% ------------------------------------------------------------
+% Title Page
+% ------------------------------------------------------------
+
+\begin{titlepage}
+
+\thispagestyle{empty}
+
+\centering
+
+\vspace*{2cm}
+
+{\Huge
+\textbf{InterpBench}
+}
+
+\vspace{0.5cm}
+
+{\Large
+Interpretability Benchmark Report
+}
+
+\vspace{2cm}
+
+
+%%TITLE_PAGE%%
+
+
+\vfill
+
+Generated automatically by InterpBench
+
+\vspace{0.5cm}
+
+\DTMnow
+
+\end{titlepage}
+
+
+% ============================================================
+% Tables
+% ============================================================
+
+
+%%TABLES_SECTION%%
+
+
+
+% ============================================================
+% Figures
+% ============================================================
+
+\pagestyle{fancy}
+
+\newpage
+
+\section{Figures}
+
+%%FIGURES_SECTION%%
+
+
+
+% ============================================================
+% End
+% ============================================================
+
+\end{document}
