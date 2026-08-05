@@ -1185,7 +1185,9 @@ def _all_statistics(histories):
     """
     Generate hierarchical benchmark statistics.
 
-    Layout:
+    CSV
+    ---
+    The CSV contains the complete hierarchy:
 
         model
         dataset
@@ -1197,10 +1199,43 @@ def _all_statistics(histories):
     where
 
         run = AVE
-            -> mean ± 95% CI across runs
+            -> mean +/- 95% CI across runs
 
         run = integer
             -> raw observation
+
+    LaTeX
+    -----
+    The LaTeX table is a presentation table containing ONLY the
+    AVE rows.
+
+    Its hierarchy is:
+
+        model
+        dataset
+        trainer
+        epoch
+        level
+
+    For each epoch:
+
+        Overall
+        Layer 0
+        Layer 1
+        ...
+
+    Overall contains:
+
+        Accuracy
+        PGD
+        F1-Robust
+        Score
+        Integral
+
+    Layer rows contain:
+
+        Score
+        Integral
 
     Outputs
     -------
@@ -1220,17 +1255,26 @@ def _all_statistics(histories):
     except Exception:
         HAVE_SCIPY = False
 
-
     # -------------------------------------------------------------
     # Helpers
     # -------------------------------------------------------------
 
     def mean_ci(values):
+        """
+        Return mean and 95% CI.
+
+        One observation:
+            mean, NaN
+
+        Multiple observations:
+            mean, Student-t 95% CI
+        """
 
         values = [
             float(v)
             for v in values
-            if v is not None and not np.isnan(v)
+            if v is not None
+            and not np.isnan(float(v))
         ]
 
         if len(values) == 0:
@@ -1247,37 +1291,43 @@ def _all_statistics(histories):
         if HAVE_SCIPY:
             crit = t.ppf(
                 0.975,
-                len(values)-1,
+                len(values) - 1,
             )
         else:
             crit = 1.96
 
         return mean, crit * sem
 
+    # -------------------------------------------------------------
+    # Metric formatting
+    # -------------------------------------------------------------
 
     def fmt(mean, ci, scientific=False):
 
         if mean is None or np.isnan(mean):
             return ""
 
-        if np.isnan(ci):
+        if ci is None or np.isnan(ci):
+
             if scientific:
                 return f"{mean:.3e}"
+
             return f"{mean:.4f}"
 
         if scientific:
-            return f"{mean:.3e}±{ci:.3e}"
+            return (
+                f"{mean:.3e}±{ci:.3e}"
+            )
 
-        return f"{mean:.4f}±{ci:.4f}"
+        return (
+            f"{mean:.4f}±{ci:.4f}"
+        )
 
+    # -------------------------------------------------------------
+    # Run sorting
+    # -------------------------------------------------------------
 
     def run_key(run):
-        """
-        Sorting rule:
-
-            AVE first
-            then numerical runs
-        """
 
         if run == "AVE":
             return (0, -1)
@@ -1287,14 +1337,64 @@ def _all_statistics(histories):
         except Exception:
             return (2, str(run))
 
+    # -------------------------------------------------------------
+    # Epoch sorting
+    # -------------------------------------------------------------
+
+    def epoch_key(epoch):
+
+        if epoch is None:
+            return (0, float("-inf"))
+
+        try:
+            return (1, float(epoch))
+        except Exception:
+            return (2, str(epoch))
+
+    # -------------------------------------------------------------
+    # F1-Robust
+    # -------------------------------------------------------------
+
+    def robust_f1(accuracy, pgd):
+
+        if (
+            accuracy is None
+            or pgd is None
+            or np.isnan(float(accuracy))
+            or np.isnan(float(pgd))
+            or accuracy + pgd == 0
+        ):
+            return np.nan
+
+        return (
+            2.0
+            * accuracy
+            * pgd
+            / (accuracy + pgd)
+        )
 
     # -------------------------------------------------------------
     # Group snapshots
+    #
+    # Important:
+    #
+    # The run is intentionally NOT part of this key.
+    #
+    # This gives us all runs for:
+    #
+    #     model / dataset / trainer / epoch
+    #
+    # so that AVE statistics can be calculated across runs.
     # -------------------------------------------------------------
 
     grouped = defaultdict(list)
 
-    for (model, dataset, trainer, run), history in histories.items():
+    for (
+        model,
+        dataset,
+        trainer,
+        run,
+    ), history in histories.items():
 
         for snapshot in history:
 
@@ -1307,269 +1407,283 @@ def _all_statistics(histories):
                 )
             ].append(snapshot)
 
+    # =============================================================
+    # BUILD CSV DATA
+    # =============================================================
 
-    rows = []
-
+    csv_rows = []
 
     # -------------------------------------------------------------
-    # Build hierarchical rows
+    # Iterate through model/dataset/trainer/epoch groups
     # -------------------------------------------------------------
 
-    for (
-        model,
-        dataset,
-        trainer,
-        epoch,
-    ) in sorted(grouped.keys()):
+    for group_key in sorted(
+        grouped.keys(),
+        key=lambda k: (
+            str(k[0]),
+            str(k[1]),
+            str(k[2]),
+            epoch_key(k[3]),
+        ),
+    ):
 
+        (
+            model,
+            dataset,
+            trainer,
+            epoch,
+        ) = group_key
 
-        snapshots = grouped[
-            (
-                model,
-                dataset,
-                trainer,
-                epoch,
-            )
+        snapshots = grouped[group_key]
+
+        # =========================================================
+        # AVE / Overall
+        # =========================================================
+
+        accuracy_values = [
+            s.accuracy
+            for s in snapshots
         ]
 
+        pgd_values = [
+            s.pgd_accuracy
+            for s in snapshots
+        ]
 
-        # ---------------------------------------------------------
-        # AVE row
-        # ---------------------------------------------------------
+        score_values = [
+            s.interpretability_score
+            for s in snapshots
+        ]
 
-        def make_metrics(items):
+        integral_values = [
+            s.interpretability_integral
+            for s in snapshots
+        ]
 
-            accuracy = [
-                s.accuracy for s in items
-            ]
+        f1_values = [
+            robust_f1(
+                s.accuracy,
+                s.pgd_accuracy,
+            )
+            for s in snapshots
+        ]
 
-            pgd = [
-                s.pgd_accuracy for s in items
-            ]
+        accuracy_mean, accuracy_ci = mean_ci(
+            accuracy_values
+        )
 
-            score = [
-                s.interpretability_score for s in items
-            ]
+        pgd_mean, pgd_ci = mean_ci(
+            pgd_values
+        )
 
-            integral = [
-                s.interpretability_integral for s in items
-            ]
+        f1_mean, f1_ci = mean_ci(
+            f1_values
+        )
 
-            f1 = []
+        score_mean, score_ci = mean_ci(
+            score_values
+        )
 
-            for s in items:
+        integral_mean, integral_ci = mean_ci(
+            integral_values
+        )
 
-                if (
-                    s.accuracy is None
-                    or s.pgd_accuracy is None
-                    or s.accuracy+s.pgd_accuracy == 0
-                ):
-                    f1.append(np.nan)
-
-                else:
-                    f1.append(
-                        2*s.accuracy*s.pgd_accuracy /
-                        (s.accuracy+s.pgd_accuracy)
-                    )
-
-            return {
-                "accuracy": mean_ci(accuracy),
-                "pgd": mean_ci(pgd),
-                "f1": mean_ci(f1),
-                "score": mean_ci(score),
-                "integral": mean_ci(integral),
-            }
-
-
-        ave = make_metrics(snapshots)
-
-
-        rows.append(
+        csv_rows.append(
             {
-                "model":model,
-                "dataset":dataset,
-                "trainer":trainer,
-                "epoch":epoch,
-                "run":"AVE",
-                "level":"Overall",
+                "model": model,
+                "dataset": dataset,
+                "trainer": trainer,
+                "epoch": epoch,
+                "run": "AVE",
+                "level": "Overall",
 
-                "accuracy_mean":ave["accuracy"][0],
-                "accuracy_ci":ave["accuracy"][1],
+                "accuracy_mean": accuracy_mean,
+                "accuracy_ci": accuracy_ci,
 
-                "pgd_mean":ave["pgd"][0],
-                "pgd_ci":ave["pgd"][1],
+                "pgd_mean": pgd_mean,
+                "pgd_ci": pgd_ci,
 
-                "f1_mean":ave["f1"][0],
-                "f1_ci":ave["f1"][1],
+                "f1_mean": f1_mean,
+                "f1_ci": f1_ci,
 
-                "score_mean":ave["score"][0],
-                "score_ci":ave["score"][1],
+                "score_mean": score_mean,
+                "score_ci": score_ci,
 
-                "integral_mean":ave["integral"][0],
-                "integral_ci":ave["integral"][1],
+                "integral_mean": integral_mean,
+                "integral_ci": integral_ci,
             }
         )
 
+        # =========================================================
+        # AVE / Layer rows
+        # =========================================================
 
-        # ---------------------------------------------------------
-        # AVE layer rows
-        # ---------------------------------------------------------
-
-        max_layers=max(
-            len(s.layers)
-            for s in snapshots
+        max_layers = max(
+            (
+                len(s.layers)
+                for s in snapshots
+            ),
+            default=0,
         )
 
         for layer_idx in range(max_layers):
 
-            values=[]
+            layer_scores = []
+            layer_integrals = []
 
             for s in snapshots:
 
-                if layer_idx < len(s.layers):
-                    values.append(
-                        s.layers[layer_idx].score
+                if layer_idx >= len(s.layers):
+                    continue
+
+                layer = s.layers[layer_idx]
+
+                if layer.score is not None:
+                    layer_scores.append(
+                        layer.score
                     )
 
+                # -------------------------------------------------
+                # Support layer.integral if it exists.
+                #
+                # If the layer object does not have an integral,
+                # leave it empty.
+                # -------------------------------------------------
 
-            m,c=mean_ci(values)
+                if hasattr(layer, "integral"):
 
+                    if layer.integral is not None:
+                        layer_integrals.append(
+                            layer.integral
+                        )
 
-            rows.append(
+            layer_score_mean, layer_score_ci = mean_ci(
+                layer_scores
+            )
+
+            layer_integral_mean, layer_integral_ci = mean_ci(
+                layer_integrals
+            )
+
+            csv_rows.append(
                 {
-                    "model":"",
-                    "dataset":"",
-                    "trainer":"",
-                    "epoch":"",
-                    "run":"AVE",
-                    "level":f"Layer {layer_idx}",
+                    "model": "",
+                    "dataset": "",
+                    "trainer": "",
+                    "epoch": "",
+                    "run": "AVE",
+                    "level": f"Layer {layer_idx}",
 
-                    "accuracy_mean":np.nan,
-                    "accuracy_ci":np.nan,
+                    "accuracy_mean": np.nan,
+                    "accuracy_ci": np.nan,
 
-                    "pgd_mean":np.nan,
-                    "pgd_ci":np.nan,
+                    "pgd_mean": np.nan,
+                    "pgd_ci": np.nan,
 
-                    "f1_mean":np.nan,
-                    "f1_ci":np.nan,
+                    "f1_mean": np.nan,
+                    "f1_ci": np.nan,
 
-                    "score_mean":m,
-                    "score_ci":c,
+                    "score_mean": layer_score_mean,
+                    "score_ci": layer_score_ci,
 
-                    "integral_mean":np.nan,
-                    "integral_ci":np.nan,
+                    "integral_mean": layer_integral_mean,
+                    "integral_ci": layer_integral_ci,
                 }
             )
 
-
-        # ---------------------------------------------------------
+        # =========================================================
         # Individual runs
-        # ---------------------------------------------------------
+        # =========================================================
 
         for snapshot in sorted(
             snapshots,
-            key=lambda s: run_key(s.run)
+            key=lambda s: run_key(s.run),
         ):
 
+            f1 = robust_f1(
+                snapshot.accuracy,
+                snapshot.pgd_accuracy,
+            )
 
-            rows.append(
+            csv_rows.append(
                 {
-                    "model":model,
-                    "dataset":dataset,
-                    "trainer":trainer,
-                    "epoch":epoch,
-                    "run":snapshot.run,
-                    "level":"Overall",
+                    "model": model,
+                    "dataset": dataset,
+                    "trainer": trainer,
+                    "epoch": epoch,
+                    "run": snapshot.run,
+                    "level": "Overall",
 
-                    "accuracy_mean":snapshot.accuracy,
-                    "accuracy_ci":np.nan,
+                    "accuracy_mean": snapshot.accuracy,
+                    "accuracy_ci": np.nan,
 
-                    "pgd_mean":snapshot.pgd_accuracy,
-                    "pgd_ci":np.nan,
+                    "pgd_mean": snapshot.pgd_accuracy,
+                    "pgd_ci": np.nan,
 
-                    "f1_mean":(
-                        2*snapshot.accuracy*
-                        snapshot.pgd_accuracy /
-                        (snapshot.accuracy+
-                         snapshot.pgd_accuracy)
-                        if snapshot.accuracy is not None
-                        and snapshot.pgd_accuracy is not None
-                        and snapshot.accuracy+
-                           snapshot.pgd_accuracy !=0
-                        else np.nan
-                    ),
-
-                    "f1_ci":np.nan,
+                    "f1_mean": f1,
+                    "f1_ci": np.nan,
 
                     "score_mean":
                         snapshot.interpretability_score,
-
-                    "score_ci":np.nan,
+                    "score_ci": np.nan,
 
                     "integral_mean":
                         snapshot.interpretability_integral,
-
-                    "integral_ci":np.nan,
+                    "integral_ci": np.nan,
                 }
             )
 
+            # -----------------------------------------------------
+            # Individual layer rows
+            # -----------------------------------------------------
 
-            for idx,layer in enumerate(snapshot.layers):
+            for layer_idx, layer in enumerate(
+                snapshot.layers
+            ):
 
-                rows.append(
+                layer_integral = np.nan
+
+                if hasattr(layer, "integral"):
+                    if layer.integral is not None:
+                        layer_integral = layer.integral
+
+                csv_rows.append(
                     {
-                        "model":"",
-                        "dataset":"",
-                        "trainer":"",
-                        "epoch":"",
-                        "run":snapshot.run,
-                        "level":f"Layer {idx}",
+                        "model": "",
+                        "dataset": "",
+                        "trainer": "",
+                        "epoch": "",
+                        "run": snapshot.run,
+                        "level": f"Layer {layer_idx}",
 
-                        "accuracy_mean":np.nan,
-                        "accuracy_ci":np.nan,
+                        "accuracy_mean": np.nan,
+                        "accuracy_ci": np.nan,
 
-                        "pgd_mean":np.nan,
-                        "pgd_ci":np.nan,
+                        "pgd_mean": np.nan,
+                        "pgd_ci": np.nan,
 
-                        "f1_mean":np.nan,
-                        "f1_ci":np.nan,
+                        "f1_mean": np.nan,
+                        "f1_ci": np.nan,
 
-                        "score_mean":layer.score,
-                        "score_ci":np.nan,
+                        "score_mean": layer.score,
+                        "score_ci": np.nan,
 
-                        "integral_mean":np.nan,
-                        "integral_ci":np.nan,
+                        "integral_mean": layer_integral,
+                        "integral_ci": np.nan,
                     }
                 )
 
-
-    # -------------------------------------------------------------
-    # Sort
-    # -------------------------------------------------------------
-
-    rows.sort(
-        key=lambda r:(
-            r["model"],
-            r["dataset"],
-            r["trainer"],
-            r["epoch"],
-            run_key(r["run"]),
-            r["level"],
-        )
-    )
-
-
-    # -------------------------------------------------------------
+    # =============================================================
     # CSV
-    # -------------------------------------------------------------
+    # =============================================================
 
     with open(
         "all_statistics.csv",
         "w",
-        newline=""
+        newline="",
     ) as f:
 
-        writer=csv.writer(f)
+        writer = csv.writer(f)
 
         writer.writerow(
             [
@@ -1597,40 +1711,307 @@ def _all_statistics(histories):
             ]
         )
 
-        for r in rows:
+        for r in csv_rows:
 
             writer.writerow(
                 [
-                    r[k]
-                    for k in [
-                        "model",
-                        "dataset",
-                        "trainer",
-                        "epoch",
-                        "run",
-                        "level",
+                    r["model"],
+                    r["dataset"],
+                    r["trainer"],
+                    r["epoch"],
+                    r["run"],
+                    r["level"],
 
-                        "accuracy_mean",
-                        "accuracy_ci",
+                    r["accuracy_mean"],
+                    r["accuracy_ci"],
 
-                        "pgd_mean",
-                        "pgd_ci",
+                    r["pgd_mean"],
+                    r["pgd_ci"],
 
-                        "f1_mean",
-                        "f1_ci",
+                    r["f1_mean"],
+                    r["f1_ci"],
 
-                        "score_mean",
-                        "score_ci",
+                    r["score_mean"],
+                    r["score_ci"],
 
-                        "integral_mean",
-                        "integral_ci",
-                    ]
+                    r["integral_mean"],
+                    r["integral_ci"],
                 ]
             )
 
-
     print(
         "Saved all_statistics.csv"
+    )
+
+    # =============================================================
+    # LATEX DATA
+    #
+    # IMPORTANT:
+    #
+    # We DO NOT derive this from csv_rows.
+    #
+    # We build it directly from grouped snapshots so individual
+    # runs can never accidentally appear in the paper table.
+    # =============================================================
+
+    latex_rows = []
+
+    for group_key in sorted(
+        grouped.keys(),
+        key=lambda k: (
+            str(k[0]),
+            str(k[1]),
+            str(k[2]),
+            epoch_key(k[3]),
+        ),
+    ):
+
+        (
+            model,
+            dataset,
+            trainer,
+            epoch,
+        ) = group_key
+
+        snapshots = grouped[group_key]
+
+        # ---------------------------------------------------------
+        # Overall
+        # ---------------------------------------------------------
+
+        accuracy_mean, accuracy_ci = mean_ci(
+            [
+                s.accuracy
+                for s in snapshots
+            ]
+        )
+
+        pgd_mean, pgd_ci = mean_ci(
+            [
+                s.pgd_accuracy
+                for s in snapshots
+            ]
+        )
+
+        f1_mean, f1_ci = mean_ci(
+            [
+                robust_f1(
+                    s.accuracy,
+                    s.pgd_accuracy,
+                )
+                for s in snapshots
+            ]
+        )
+
+        score_mean, score_ci = mean_ci(
+            [
+                s.interpretability_score
+                for s in snapshots
+            ]
+        )
+
+        integral_mean, integral_ci = mean_ci(
+            [
+                s.interpretability_integral
+                for s in snapshots
+            ]
+        )
+
+        latex_rows.append(
+            {
+                "model": model,
+                "dataset": dataset,
+                "trainer": trainer,
+                "epoch": epoch,
+                "level": "Overall",
+
+                "accuracy":
+                    fmt(
+                        accuracy_mean,
+                        accuracy_ci,
+                        scientific=True,
+                    ),
+
+                "pgd":
+                    fmt(
+                        pgd_mean,
+                        pgd_ci,
+                        scientific=True,
+                    ),
+
+                "f1":
+                    fmt(
+                        f1_mean,
+                        f1_ci,
+                        scientific=True,
+                    ),
+
+                "score":
+                    fmt(
+                        score_mean,
+                        score_ci,
+                        scientific=True,
+                    ),
+
+                "integral":
+                    fmt(
+                        integral_mean,
+                        integral_ci,
+                        scientific=True,
+                    ),
+            }
+        )
+
+        # ---------------------------------------------------------
+        # Layers
+        # ---------------------------------------------------------
+
+        max_layers = max(
+            (
+                len(s.layers)
+                for s in snapshots
+            ),
+            default=0,
+        )
+
+        for layer_idx in range(max_layers):
+
+            layer_scores = []
+
+            layer_integrals = []
+
+            for s in snapshots:
+
+                if layer_idx >= len(s.layers):
+                    continue
+
+                layer = s.layers[layer_idx]
+
+                if layer.score is not None:
+                    layer_scores.append(
+                        layer.score
+                    )
+
+                if hasattr(layer, "integral"):
+                    if layer.integral is not None:
+                        layer_integrals.append(
+                            layer.integral
+                        )
+
+            layer_score_mean, layer_score_ci = mean_ci(
+                layer_scores
+            )
+
+            layer_integral_mean, layer_integral_ci = mean_ci(
+                layer_integrals
+            )
+
+            latex_rows.append(
+                {
+                    "model": "",
+                    "dataset": "",
+                    "trainer": "",
+                    "epoch": "",
+
+                    "level":
+                        f"Layer {layer_idx}",
+
+                    # Layer rows do not have these metrics.
+                    "accuracy": "",
+                    "pgd": "",
+                    "f1": "",
+
+                    "score":
+                        fmt(
+                            layer_score_mean,
+                            layer_score_ci,
+                            scientific=True,
+                        ),
+
+                    "integral":
+                        fmt(
+                            layer_integral_mean,
+                            layer_integral_ci,
+                            scientific=True,
+                        ),
+                }
+            )
+
+    # =============================================================
+    # LaTeX
+    # =============================================================
+
+    tex_file = "all_statistics.tex"
+
+    with open(tex_file, "w") as f:
+
+        f.write("\\begin{table*}[t]\n")
+        f.write("\\centering\n")
+        f.write("\\scriptsize\n")
+        f.write("\\setlength{\\tabcolsep}{3pt}\n")
+
+        f.write(
+            "\\begin{tabular}{lllclccccc}\n"
+        )
+
+        f.write("\\hline\n")
+
+        f.write(
+            "Model & Dataset & Trainer & Epoch & Level & "
+            "Accuracy & PGD & F1-Robust & Score & Integral"
+            "\\\\\n"
+        )
+
+        f.write("\\hline\n")
+
+        previous_epoch = None
+
+        for r in latex_rows:
+
+            # -----------------------------------------------------
+            # New epoch group
+            # -----------------------------------------------------
+
+            if (
+                previous_epoch is not None
+                and r["epoch"] != ""
+            ):
+                f.write("\\hline\n")
+
+            f.write(
+                f"{r['model']} & "
+                f"{r['dataset']} & "
+                f"{r['trainer']} & "
+                f"{r['epoch']} & "
+                f"{r['level']} & "
+                f"{r['accuracy']} & "
+                f"{r['pgd']} & "
+                f"{r['f1']} & "
+                f"{r['score']} & "
+                f"{r['integral']}"
+                "\\\\\n"
+            )
+
+            if r["epoch"] != "":
+                previous_epoch = r["epoch"]
+
+        f.write("\\hline\n")
+        f.write("\\end{tabular}\n")
+
+        f.write(
+            "\\caption{Hierarchical benchmark statistics. "
+            "Values are reported as mean $\\pm$ 95\\% confidence "
+            "interval across runs.}\n"
+        )
+
+        f.write(
+            "\\label{tab:all_statistics}\n"
+        )
+
+        f.write("\\end{table*}\n")
+
+    print(
+        f"Saved {tex_file}"
     )
 
 def _report_table_2(histories):
